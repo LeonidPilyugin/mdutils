@@ -3,42 +3,19 @@ from dataclasses import dataclass
 import openmm as mm
 import numpy as np
 from ase import Atoms
+from ase import units as ase_units
 from ase.constraints import FixAtoms
 from ase.units import fs
 from ..solver import Solver
+from .. import openmmhelper
 
 class OpenMmSolver(Solver):
-    @dataclass
-    class Units:
-        length: mm.unit.Unit
-        time: mm.unit.Unit
-        energy: mm.unit.Unit
-        mass: mm.unit.Unit
-
-        @property
-        def velocity(self) -> mm.unit.Unit:
-            return self.length / self.time
-
-        @property
-        def force(self) -> mm.unit.Unit:
-            return self.energy / self.length
-
     def __init__(self) -> None:
         super().__init__()
-
-        self.units = OpenMmSolver.Units(
-            length = mm.unit.angstrom,
-            time = mm.unit.femtoseconds,
-            energy = mm.unit.kilojoule_per_mole,
-            mass = mm.unit.atom_mass_units,
-        )
 
     def load_from_dict(self, dct: tp.Dict[str, tp.Any]) -> None:
         integrator_class = getattr(mm, dct["integrator"]["type"])
         self.integrator = integrator_class(*dct["integrator"]["arguments"])
-        # self.integrator = mm.VerletIntegrator(
-        #     0.25 * mm.unit.femtoseconds
-        # )
 
         self.platform = dct["platform"]
 
@@ -62,28 +39,25 @@ class OpenMmSolver(Solver):
     def load_system(self, atoms: Atoms) -> None:
         self._atoms = atoms.copy()
 
-        cell = np.array(atoms.cell) * self.units.length
-        positions = np.array(atoms.positions) * self.units.length
-        velocities = (
-            np.array(atoms.get_velocities()) * fs
-        ) * self.units.velocity
-        masses = np.array(atoms.get_masses()) * self.units.mass
+        masses = openmmhelper.Masses.from_ase(np.array(atoms.get_masses()))
         types = atoms.get_chemical_symbols()
 
         system = mm.System()
-        system.setDefaultPeriodicBoxVectors(*cell)
+
+        system.setDefaultPeriodicBoxVectors(
+            *openmmhelper.Cell.from_ase(np.array(atoms.cell))
+        )
 
         for constraint in atoms.constraints:
             if isinstance(constraint, FixAtoms):
-                masses[constraint.get_indices()] = 0.0 * self.units.mass
+                masses[constraint.get_indices()] = (
+                    openmmhelper.Masses.from_ase(0.0)
+                )
 
         for mass in masses:
             system.addParticle(mass)
 
-        for i in range(len(self.potentials)):
-            force = self.potentials[i]
-            data = self.potential_data[i]
-
+        for force, data in zip(self.potentials, self.potential_data):
             if hasattr(force, "addParticle"):
                 for i, _ in enumerate(masses):
                     force.addParticle(*data[types[i]])
@@ -101,8 +75,12 @@ class OpenMmSolver(Solver):
             self.platform["arguments"]
         )
 
-        context.setPositions(positions)
-        context.setVelocities(velocities)
+        context.setPositions(
+            openmmhelper.Positions.from_ase(np.array(atoms.positions))
+        )
+        context.setVelocities(
+            openmmhelper.Velocities.from_ase(atoms.get_velocities())
+        )
 
         self.context = context
 
@@ -135,24 +113,24 @@ class OpenMmSolver(Solver):
         atoms = self._atoms.copy();
 
         atoms.set_positions(
-            state.getPositions(asNumpy=True)
-                .value_in_unit(self.units.length)
+            openmmhelper.Positions.from_openmm(
+                state.getPositions(asNumpy=True)
+            )
         )
 
         atoms.set_velocities(
-            state.getVelocities(asNumpy=True)
-                .value_in_unit(self.units.velocity) / fs
+            openmmhelper.Velocities.from_openmm(
+                state.getVelocities(asNumpy=True)
+            )
         )
 
         atoms.calc = _Calculator(
-            energy=state.getPotentialEnergy()
-                .value_in_unit(
-                    mm.unit.kilojoule_per_mole
-                ) / 96.4853321233,
-            forces=state.getForces(asNumpy=True)
-                .value_in_unit(
-                    mm.unit.kilojoule_per_mole / mm.unit.angstrom
-                ) / 96.4853321233
+            energy=openmmhelper.Energy.from_openmm(
+                energy=state.getPotentialEnergy()
+            ),
+            forces=openmmhelper.Forces.from_openmm(
+                state.getForces(asNumpy=True)
+            ),
         )
 
         return atoms

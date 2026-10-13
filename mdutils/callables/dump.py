@@ -28,7 +28,17 @@ class Dump(Solver.Callable):
         self.log = log
 
         with open(path / log, "w") as f:
-            f.write("step\tk_e\tp_e\tt_e\ttemperature\n")
+            header = (
+                f"{'Step':>10} "
+                f"{'Temp (K)':>11} "
+                f"{'E_pot (eV)':>16} "
+                f"{'E_kin (eV)':>16} "
+                f"{'E_tot (eV)':>16}"
+            )
+
+            f.write(header + "\n")
+
+            f.write("-" * (len(header) + 2) + "\n")
 
         self.array = []
 
@@ -77,4 +87,11 @@ class Dump(Solver.Callable):
         )
 
         with open(self.path / self.log, "a") as f:
-            f.write(f"{step}\t{k_e}\t{p_e}\t{t_e}\t{temperature}\n")
+            f.write(
+                f"{step:10d} "
+                f"{temperature:11.2f} "
+                f"{p_e:16.6f} "
+                f"{k_e:16.6f} "
+                f"{t_e:16.6f} "
+                "\n"
+            )
