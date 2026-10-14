@@ -106,7 +106,7 @@ class Uo2SlabSystem(ABC):
 
         slab.positions[top_o_atoms] -= np.asarray(
             [0, 0, spacing * self.n_layers]
-        ) + c
+        )
 
         slab.pbc = True
 
@@ -129,6 +129,9 @@ class Uo2SlabSystem(ABC):
         reference: np.ndarray,
         basis: tp.Tuple[np.ndarray, np.ndarray]
     ) -> Atoms:
+        if n_atoms == 0:
+            return Atoms()
+
         def basis_sequence(k : int):
             a, b = basis
             vs = [a, b, b - a, -a, -b, -b + a]
@@ -248,3 +251,16 @@ class Uo2SlabSystem(ABC):
         self.freeze(slab)
 
         return slab
+
+if __name__ == "__main__":
+    from ase.visualize import view
+
+    view(
+        Uo2SlabSystem(
+            0,
+            3000.0,
+            vacuum=160.0,
+            repeatition=(5,5,1),
+            n_layers=12,
+        ).create_system(),
+    )
