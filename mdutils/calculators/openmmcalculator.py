@@ -15,32 +15,22 @@ class OpenMmCalculator(Calculator):
     def __init__(
         self,
         atoms: Atoms,
-        dct: tp.Dict[str, tp.Any],
+        integrator: mm.Integrator,
+        platform: mm.Platform,
+        platform_prop: tp.Dict[str, str],
+        forces: tp.Iterable[mm.Force],
+        forcedata: tp.Iterable[tp.Dict[str, tp.Any]],
         **kwargs,
     ):
         super().__init__(**kwargs)
 
-        integrator_class = getattr(mm, dct["integrator"]["type"])
-        self.integrator = integrator_class(*dct["integrator"]["arguments"])
+        self._integrator = integrator
 
-        self.platform = dct["platform"]
+        self._platform = platform
+        self._platform_prop = platform_prop
 
-        self.potentials = []
-        self.potential_data = []
-
-        for potential_data in dct["potentials"]:
-            with open(potential_data["path"], "r") as f:
-                self.potentials.append(
-                    mm.XmlSerializer.deserialize(
-                        f.read()
-                    )
-                )
-
-                self.potential_data.append(
-                    potential_data.get(
-                        "particles", None
-                    )
-                )
+        self._forces = forces
+        self._forcedata = forcedata
 
         cell = openmmhelper.Cell.from_ase(atoms.cell.array)
         positions = openmmhelper.Positions.from_ase(atoms.get_positions())
@@ -52,48 +42,41 @@ class OpenMmCalculator(Calculator):
         for _ in positions:
             system.addParticle(0)
 
-        for i in range(len(self.potentials)):
-            force = self.potentials[i]
-            data = self.potential_data[i]
-
+        for i, (force, data) in enumerate(zip(self._forces, self._forcedata)):
             if hasattr(force, "addParticle"):
                 for i, _ in enumerate(positions):
                     force.addParticle(*data[types[i]])
 
             system.addForce(force)
 
-        platform = mm.Platform.getPlatformByName(
-            self.platform["type"]
-        )
-
-        context = mm.Context(
+        self._context = mm.Context(
             system,
-            self.integrator,
-            platform,
-            self.platform["arguments"]
+            self._integrator,
+            self._platform,
+            self._platform_prop
         )
 
-        context.setPositions(positions)
-
-        self.context = context
+        self._context.setPositions(positions)
 
     def calculate(
         self,
-        atoms=None,
+        atoms: None | Atoms = None,
         properties=("energy", "forces"),
         system_changes=all_changes,
     ):
         super().calculate(atoms, properties, system_changes)
 
-        self.context.setPositions(
+        assert isinstance(atoms, Atoms)
+
+        self._context.setPositions(
             openmmhelper.Positions.from_ase(atoms.get_positions())
         )
 
-        self.context.setPeriodicBoxVectors(
+        self._context.setPeriodicBoxVectors(
             *openmmhelper.Cell.from_ase(np.array(atoms.cell))
         )
 
-        state = self.context.getState(
+        state = self._context.getState(
             getEnergy=True,
             getForces=True,
         )
@@ -106,6 +89,6 @@ class OpenMmCalculator(Calculator):
         )
 
     def close(self):
-        del self.context
-        del self.integrator
+        del self._context
+        del self._integrator
 

@@ -10,31 +10,22 @@ from ..solver import Solver
 from .. import openmmhelper
 
 class OpenMmSolver(Solver):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        integrator: mm.Integrator,
+        platform: mm.Platform,
+        platform_prop: tp.Dict[str, str],
+        forces: tp.Iterable[mm.Force],
+        forcedata: tp.Iterable[tp.Dict[str, tp.Any]],
+    ) -> None:
         super().__init__()
+        self._integrator = integrator
+        self._platform = platform
+        self._forces = []
+        self._forcedata = forcedata
+        self._platform_prop = platform_prop
+        self._context: None | mm.Context = None
 
-    def load_from_dict(self, dct: tp.Dict[str, tp.Any]) -> None:
-        integrator_class = getattr(mm, dct["integrator"]["type"])
-        self.integrator = integrator_class(*dct["integrator"]["arguments"])
-
-        self.platform = dct["platform"]
-
-        self.potentials = []
-        self.potential_data = []
-
-        for potential_data in dct["potentials"]:
-            with open(potential_data["path"], "r") as f:
-                self.potentials.append(
-                    mm.XmlSerializer.deserialize(
-                        f.read()
-                    )
-                )
-
-                self.potential_data.append(
-                    potential_data.get(
-                        "particles", None
-                    )
-                )
 
     def load_system(self, atoms: Atoms) -> None:
         self._atoms = atoms.copy()
@@ -57,22 +48,18 @@ class OpenMmSolver(Solver):
         for mass in masses:
             system.addParticle(mass)
 
-        for force, data in zip(self.potentials, self.potential_data):
+        for force, data in zip(self._forces, self._forcedata):
             if hasattr(force, "addParticle"):
                 for i, _ in enumerate(masses):
                     force.addParticle(*data[types[i]])
 
             system.addForce(force)
 
-        platform = mm.Platform.getPlatformByName(
-            self.platform["type"]
-        )
-
         context = mm.Context(
             system,
-            self.integrator,
-            platform,
-            self.platform["arguments"]
+            self._integrator,
+            self._platform,
+            self._platform_prop,
         )
 
         context.setPositions(
@@ -146,7 +133,7 @@ class OpenMmSolver(Solver):
                 )
             )
 
-            self.integrator.step(to_run)
+            self._integrator.step(to_run)
             steps_done += to_run
 
             atoms = self.get_atoms()
