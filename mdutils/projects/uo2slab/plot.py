@@ -3,6 +3,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 import numpy as np
 from pathlib import Path
+import typing as tp
 from ...plot.styles import style_context
 from .system import SpiralCluster, Uo2SlabSystem, DefectType
 
@@ -126,8 +127,12 @@ def plot_de_vs_n(
     help="Working directory"
 )
 @click.option(
-    "--data", "data_filename", type=click.STRING, default="minimize.csv",
-    help="Data file name"
+    "--data", "data_filenames", type=click.STRING, default="minimize.csv",
+    multiple=True, help="Data file name"
+)
+@click.option(
+    "--label", "labels", type=click.STRING, default="",
+    multiple=True, help="Data file name"
 )
 @click.option(
     "--plot", "plot_filename", type=click.STRING, default="minimize.png",
@@ -144,28 +149,39 @@ def plot_de_vs_n(
 )
 def plot_de_vs_b(
     working_directory: Path,
-    data_filename: str,
+    data_filenames: tp.Tuple[str],
     plot_filename: str,
     cogesion_energy: float,
     defect_type: DefectType,
+    labels: tp.Tuple[str],
 ) -> None:
     """Plot energy difference vs number of cut horizontal bonds"""
 
     if defect_type is DefectType.ADATOM:
         cogesion_energy *= -1.0
 
+    assert len(labels) == len(data_filenames)
 
     plt.cla()
+
+    data_filename = data_filenames[0]
+
     df = find_min_curve(
         pd.read_csv(working_directory / data_filename),
         cogesion_energy,
     )
     a, b = np.polyfit(df["b"], df["e"], 1)
 
-    plt.plot(df["b"], df["e"], ".")
-
     plt.axline((0, b), slope=a, color="red", linestyle="--",
                label=f"LSQ: y={a:.2f}x+{b:.2f}")
+
+    for label, data_filename in zip(labels, data_filenames):
+        df = find_min_curve(
+            pd.read_csv(working_directory / data_filename),
+            cogesion_energy,
+        )
+        plt.plot(df["b"], df["e"], ".", label=label)
+
     plt.legend()
 
     plt.xlabel("N_{bonds}")
