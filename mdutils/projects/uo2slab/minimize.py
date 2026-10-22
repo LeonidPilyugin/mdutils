@@ -4,6 +4,8 @@ from .system import Uo2SlabSystem as System
 from .system import SpiralCluster as Cluster
 from ...solvers import OpenMmSolver as Solver
 from ...utils import Platform, Parallel
+from ...utils.platform import Platform
+from ...utils.parallel import Parallel, Worker
 from ... import callables as mdc
 from ...calculators import OpenMmCalculator
 from .forces import load_forces
@@ -17,7 +19,7 @@ import multiprocessing as mp
 import typing as tp
 from ase import Atoms
 from ase.io import read
-from ase.optimize import LBFGS
+from ase.optimize import LBFGS, FIRE
 from ase.constraints import FixAtoms
 from ase.neighborlist import neighbor_list
 import numpy as np
@@ -119,7 +121,11 @@ def perform_file(
         steps=10000,
     )
 
-    return atoms.get_potential_energy(), missing_u_bonds
+    result = atoms.get_potential_energy(), missing_u_bonds
+
+    atoms.calc.close()
+
+    return result;
 
 def filegenerator(
     path: Path,
@@ -138,21 +144,32 @@ def filegenerator(
         )[::every]:
             yield f, p
 
-def perform_iteration(
-    tup: tp.Tuple[Path, Path],
-    platform: Platform,
-    gpu_idx: int,
-    reporter: Parallel.ProgressFlipReporter,
-) -> tp.Tuple[int, int, float, float]:
-    f, p = tup
-    dist, n = p.name.split("-")
-    dist = float(dist)
-    n = int(n)
+class MinimizeWorker(Worker):
+    def __init__(self, platform: Platform, freeze_u: bool, **kwargs):
+        super().__init__(**kwargs)
+        self._platform = platform
+        self._freeze_u = freeze_u
 
-    e, b = perform_file(f, platform, gpu_idx, freeze_u=True)
-    reporter.flip()
+    def __call__(
+        self,
+        tup: tp.Tuple[Path, Path],
+        gpu_idx: int,
+        *args,
+    ) -> tp.Tuple[int, int, float, float]:
+        f, p = tup
+        dist, n = p.name.split("-")
+        dist = float(dist)
+        n = int(n)
 
-    return n, b, dist, e
+        e, b = perform_file(
+            f,
+            self._platform,
+            gpu_idx,
+            freeze_u=self._freeze_u
+        )
+        self.update()
+
+        return n, b, dist, e
 
 @click.command()
 @click.option(
@@ -194,20 +211,21 @@ def main(
     parallel_workers: int,
     gpus: tp.Sequence[int],
 ) -> None:
-
-    parallel = Parallel(parallel_workers)
-
     total = len(list(filegenerator(working_directory, every)))
+    result = None
 
-    result = list(parallel.run(
-        perform_iteration,
-        filegenerator(working_directory, every),
-        [platform for _ in range(total)],
-        [gpus[i % len(gpus)] for i in range(total)],
-        parallel.progress_flip_reporter_instances(
-            total
+    with Parallel(parallel=parallel_workers, delay=1.0) as parallel:
+        result = parallel.map(
+            MinimizeWorker(
+                platform,
+                freeze_u,
+                guard=parallel.guard,
+            ),
+            filegenerator(working_directory, every),
+            [gpus[i % len(gpus)] for i in range(total)],
         )
-    ))
+
+    assert result is not None
 
     es = [r[3] for r in result]
     dists = [r[2] for r in result]
@@ -220,7 +238,6 @@ def main(
         "n": ns,
         "b": bs,
     }).to_csv(working_directory / filename)
-
 
 
 if __name__ == "__main__":

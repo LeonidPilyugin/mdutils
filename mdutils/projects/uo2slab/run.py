@@ -2,7 +2,8 @@ from .system import Uo2SlabSystem as System
 from .system import SpiralCluster as Cluster
 from .system import DefectType
 from ...solvers import OpenMmSolver as Solver
-from ...utils import Platform, Parallel
+from ...utils.parallel import Parallel, Worker, ProgressCallable
+from ...utils.platform import Platform
 from ... import callables as mdc
 from .forces import load_forces
 from pathlib import Path
@@ -21,59 +22,80 @@ class Params:
     gpu_idx: int
     vacuum: float
     N: int
-    temperature: float
-    platform: Platform
-    run_steps: int
-    mean_every: int
-    submit_every: int
-    working_path: Path
-    repeatition: tp.Tuple[int, int, int]
-    n_layers: int
-    defect_type: DefectType
 
-def run_simulation(params: Params, reporter: Parallel.ProgressReporter):
-    path = params.working_path / f"{params.vacuum}-{params.N}"
-    if path.exists():
-        shutil.rmtree(path)
-    path.mkdir(parents=True)
+class RunWorker(Worker):
+    def __init__(
+        self,
+        temperature: float,
+        platform: Platform,
+        run_steps: int,
+        mean_every: int,
+        submit_every: int,
+        working_path: Path,
+        repeatition: tp.Tuple[int, int, int],
+        n_layers: int,
+        defect_type: DefectType,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self._temperature = temperature
+        self._platform = platform
+        self._run_steps = run_steps
+        self._mean_every = mean_every
+        self._submit_every = submit_every
+        self._working_path = working_path
+        self._repeatition = repeatition
+        self._n_layers = n_layers
+        self._defect_type = defect_type
+        self._reporter = ProgressCallable(self._guard, submit_every)
 
-    system = System(
-        Cluster(params.N),
-        params.temperature,
-        vacuum=params.vacuum,
-        repeatition=params.repeatition,
-        n_layers=params.n_layers,
-        defect_type=params.defect_type,
-    ).create_system()
+    def __call__(self, params: Params, *args) -> tp.Any:
+        path = self._working_path / f"{params.vacuum}-{params.N}"
+        if path.exists():
+            shutil.rmtree(path)
+        path.mkdir(parents=True)
 
-    solver = Solver(
-        mm.LangevinIntegrator(params.temperature, 1e-2, 1e-3),
-        mm.Platform.getPlatformByName(Platform.as_str(params.platform)),
-        { "Precision": "mixed", "DeviceIndex": str(params.gpu_idx) },
-        *load_forces()
-    )
+        system = System(
+            Cluster(params.N, defect_type=self._defect_type),
+            temperature=self._temperature,
+            vacuum=params.vacuum,
+            repeatition=self._repeatition,
+            n_layers=self._n_layers,
+        ).create_system()
 
-    solver.load_system(system)
-
-    solver.attach(
-        mdc.Dump(
-            path / "mean",
-            params.submit_every,
-            params.mean_every,
+        solver = Solver(
+            mm.LangevinIntegrator(self._temperature, 1e-2, 1e-3),
+            mm.Platform.getPlatformByName(Platform.as_str(self._platform)),
+            { "Precision": "mixed", "DeviceIndex": str(params.gpu_idx) },
+            *load_forces()
         )
-    )
 
-    solver.attach(
-        mdc.Dump(
-            path / "nomean",
-            params.submit_every,
-            1,
+        solver.load_system(system)
+
+        solver.attach(
+            mdc.Dump(
+                path / "mean",
+                self._submit_every,
+                self._mean_every,
+            )
         )
-    )
 
-    solver.attach(reporter)
+        solver.attach(
+            mdc.Dump(
+                path / "nomean",
+                self._submit_every,
+                1,
+            )
+        )
 
-    solver.run(params.run_steps)
+        solver.attach(self._reporter)
+
+        solver.run(self._run_steps)
+
+        solver.close()
+
+    def total(self) -> int:
+        return self._run_steps
 
 @click.command()
 @click.option(
@@ -123,7 +145,7 @@ def run_simulation(params: Params, reporter: Parallel.ProgressReporter):
     help="Number of atom layers",
 )
 @click.option(
-    "--layers", "repeat", default=7, type=click.INT,
+    "--repeat", "repeat", default=7, type=click.INT,
     help="Number of horizontal repliation",
 )
 def main(
@@ -146,6 +168,11 @@ def main(
                 gpu_idx=gpus[i % len(gpus)],
                 vacuum=v,
                 N=d,
+            )
+
+    with Parallel(parallel=parallel_workers, delay=1.0) as parallel:
+        parallel.map(
+            RunWorker(
                 temperature=temperature,
                 platform=platform,
                 run_steps=run_steps,
@@ -154,23 +181,12 @@ def main(
                 working_path=working_directory,
                 repeatition=(repeat,repeat,1),
                 n_layers=n_layers,
-                defect_type=DefectType.VACCANCY
-            )
-
-    parallel = Parallel(parallel_workers)
-
-    total_simulations = len(list(params_generator()))
-    total_steps = run_steps * total_simulations
-
-    list(parallel.run(
-        run_simulation,
-        params_generator(),
-        parallel.progress_reporter_instances(
-            submit_every,
-            total_steps,
-            total_simulations
+                defect_type=DefectType.VACCANCY,
+                guard=parallel.guard,
+            ),
+            params_generator()
         )
-    ))
+
 
 if __name__ == "__main__":
     main()

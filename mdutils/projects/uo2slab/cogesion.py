@@ -13,7 +13,7 @@ import multiprocessing as mp
 import typing as tp
 from ase import Atoms
 from ase.io import read
-from ase.optimize import LBFGS
+from ase.optimize import LBFGS, FIRE
 from ase.constraints import FixAtoms
 import numpy as np
 import click
@@ -35,8 +35,6 @@ def create_system(
     repeat: int
 ) -> Atoms:
     atoms = System(
-        Cluster(0),
-        1000.0,
         vacuum=vacuum,
         repeatition=(repeat,repeat,1),
         n_layers=n_layers + 3 - n_layers % 3

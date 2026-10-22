@@ -5,6 +5,7 @@ from ase.calculators.calculator import Calculator, all_changes
 from ase import units as ase_units
 from ase import Atoms
 import typing as tp
+import gc
 from .. import openmmhelper
 
 
@@ -91,4 +92,5 @@ class OpenMmCalculator(Calculator):
     def close(self):
         del self._context
         del self._integrator
+        gc.collect()
 

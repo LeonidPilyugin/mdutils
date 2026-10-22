@@ -1,174 +1,282 @@
 from __future__ import annotations
 from ..solver import Solver
+from collections import deque
 import time
-from datetime import timedelta
+from datetime import timedelta, datetime
 import multiprocessing as mp
 from multiprocessing.synchronize import Lock
 from multiprocessing.sharedctypes import Synchronized, Value
 from concurrent.futures import ProcessPoolExecutor
 import typing as tp
+from abc import ABC, abstractmethod
 from ase import Atoms
+from dataclasses import dataclass
+
+class ProgressGuard:
+    def __init__(self, lock: Lock, steps: Synchronized[int]) -> None:
+        self._lock = lock
+        self._shared_steps = steps
+
+    def increment(self, done: int) -> None:
+        assert self._lock is not None
+        assert self._shared_steps is not None
+
+        with self._lock:
+            self._shared_steps.value += done
+
+    def value(self) -> int:
+        assert self._lock is not None
+        assert self._shared_steps is not None
+
+        with self._lock:
+            return self._shared_steps.value
+
+class ProgressCallable(Solver.Callable):
+    def __init__(
+        self,
+        guard: ProgressGuard,
+        every: int,
+    ):
+        self._guard = guard
+        self._last_step = 0
+        self._every = every
+
+    def call(self, step: int, atoms: Atoms) -> None:
+        self._guard.increment(step - self._last_step)
+        self._last_step = step
+
+    def matches(self, step: int) -> bool:
+        return step % self._every == 0
+
+    def next_match(self, step: int) -> int:
+        return self._every - step % self._every
+
+
+class ElapsedEstimator(ABC):
+    def __init__(self):
+        self._total: None | int = None
+
+    def reset(self, total: int) -> None:
+        self._total = total
+
+    @property
+    def total(self) -> int:
+        assert self._total is not None
+        return self._total
+
+    @abstractmethod
+    def estimate(self, done: int, now: datetime) -> None | datetime:
+        pass
+
+
+class ExponentialSmoothingEstimator(ElapsedEstimator):
+    def __init__(self, *, alpha: float = 0.9, capacity = 10):
+        super().__init__()
+        assert 0.0 < alpha <= 1.0
+        assert(capacity > 1)
+        self._alpha = alpha
+        self._performance: float | None = None
+        self._done_buffer: deque[int] = deque()
+        self._time_buffer: deque[datetime] = deque()
+        self._capacity = capacity
+
+    def estimate(self, done: int, now: datetime) -> datetime | None:
+        if done not in self._done_buffer:
+            self._done_buffer.append(done)
+            self._time_buffer.append(now)
+
+        assert len(self._done_buffer) == len(self._time_buffer)
+
+        if len(self._time_buffer) < 2:
+            return None
+
+        while len(self._time_buffer) > self._capacity:
+            self._time_buffer.popleft()
+            self._done_buffer.popleft()
+
+        cur_perf = ((self._done_buffer[-1] - self._done_buffer[0]) /
+                    (self._time_buffer[-1] - self._time_buffer[0]).total_seconds())
+
+        self._performance =  cur_perf if self._performance is None else \
+            self._performance * self._alpha + cur_perf * (1.0 - self._alpha)
+
+        if self._performance == 0.0:
+            return None
+
+        todo = self.total - done
+
+        est = self._time_buffer[-1] + timedelta(seconds=todo / self._performance)
+        # print(est, now)
+        return est
+
+
+class ProgressReporter(ABC):
+    @dataclass
+    class Data:
+        total: int
+        done: int
+        start: datetime
+        end: datetime | None
+        now: datetime
+
+        @property
+        def todo(self) -> int:
+            return self.total - self.done
+
+        @property
+        def left(self) -> timedelta | None:
+            if self.end is None:
+                return None
+            return self.end - self.now
+
+        @property
+        def passed(self) -> timedelta:
+            return self.now - self.start
+
+        @property
+        def part(self) -> float:
+            return self.done / self.total
+
+    @abstractmethod
+    def report(self, data: Data) -> None:
+        pass
+
+
+class DefaultProgressReporter(ProgressReporter):
+    def __init__(self) -> None:
+        pass
+
+    def report(self, data: ProgressReporter.Data) -> None:
+        def format_timedelta(td: timedelta | None) -> str:
+            if td is not None:
+                hours, remainder = divmod(int(td.total_seconds()), 3600)
+                minutes, seconds = divmod(remainder, 60)
+                return f"{hours}:{minutes:02}:{seconds:02}"
+            return ""
+
+        message = (f"Done {data.done} of {data.total} iterations "
+            f"({data.part * 100:.2f} %)")
+
+        if data.end is not None:
+            message += "; expected to finish time: "
+            message += f"{data.end.strftime('%Y-%m-%d %H:%M')} "
+            message += f"({format_timedelta(data.left)} left)"
+
+        print(
+            message,
+            end=" " * 100 + "\r",
+            flush=True,
+        )
+
+
+class Worker(ABC):
+    def __init__(self, *, guard: ProgressGuard):
+        self._guard = guard
+
+    def update(self, done: int = 1) -> None:
+        self._guard.increment(done)
+
+    @abstractmethod
+    def __call__(self, *args) -> tp.Any:
+        pass
+
+    def total(self) -> int:
+        return 1
+
 
 class Parallel:
-    class ProgressReporter(Solver.Callable):
-        lock: Lock | None = None
-        shared_steps: Synchronized[int] | None = None
-
-        @classmethod
-        def init_progress(
-            cls,
-            shared_lock: Lock,
-            shared_counter: Synchronized[int],
-        ) -> None:
-            cls.lock = shared_lock
-            cls.shared_steps = shared_counter
-
-        def __init__(self, every: int, total: int) -> None:
-            self.every = every
-            self.total = total
-            self.last_step = 0
-            self.start = time.perf_counter()
-
-        def matches(self, step: int) -> bool:
-            return step % self.every == 0
-
-        def next_match(self, step: int) -> int:
-            return self.every - step % self.every
-
-        def call(self, step: int, atoms: Atoms) -> None:
-            assert isinstance(self.lock, Lock), \
-                "Reporter is not initialized"
-            assert isinstance(self.shared_steps, Synchronized), \
-                "Reporter is not initialized"
-
-            with self.lock:
-                delta = max(0, step - self.last_step)
-                self.shared_steps.value += delta
-                self.last_step = step
-
-                completed = self.shared_steps.value
-                fraction = min(completed / self.total, 1.0)
-
-                elapsed = time.perf_counter() - self.start
-                eta_seconds = (
-                    elapsed * (1 - fraction) / fraction
-                    if fraction > 0 else 0
-                )
-
-                eta = timedelta(seconds=eta_seconds)
-                hours, remainder = divmod(int(eta.total_seconds()), 3600)
-                minutes, seconds = divmod(remainder, 60)
-
-                print(
-                    f"Overall progress: {fraction * 100:6.2f}% "
-                    f"({completed:,}/{self.total:,} steps) "
-                    f"ETA {hours:02d}:{minutes:02d}:{seconds:02d}",
-                    end="          \r",
-                    flush=True,
-                )
-
-    class ProgressFlipReporter:
-        lock: Lock | None = None
-        shared_steps: Synchronized[int] | None = None
-        start: float | None = None
-
-        @classmethod
-        def init_progress(
-            cls,
-            shared_lock: Lock,
-            shared_counter: Synchronized[int],
-        ) -> None:
-            cls.lock = shared_lock
-            cls.shared_steps = shared_counter
-            cls.start = time.perf_counter()
-
-        def __init__(self, total: int) -> None:
-            self.total = total
-            self.done = False
-
-        def flip(self) -> None:
-            self.done = True
-
-            assert self.lock is not None
-            assert self.shared_steps is not None
-            assert self.start is not None
-
-            with self.lock:
-                delta = 1
-                self.shared_steps.value += delta
-
-                completed = self.shared_steps.value
-                fraction = min(completed / self.total, 1.0)
-
-                elapsed = time.perf_counter() - self.start
-                eta_seconds = (
-                    elapsed * (1 - fraction) / fraction
-                    if fraction > 0 else 0
-                )
-
-                eta = timedelta(seconds=eta_seconds)
-                hours, remainder = divmod(int(eta.total_seconds()), 3600)
-                minutes, seconds = divmod(remainder, 60)
-
-                print(
-                    f"Overall progress: {fraction * 100:6.2f}% "
-                    f"({completed:,}/{self.total:,} iterations) "
-                    f"ETA {hours:02d}:{minutes:02d}:{seconds:02d}",
-                    end="          \r",
-                    flush=True,
-                )
-
     def __init__(
         self,
         parallel: int,
+        estimator: ElapsedEstimator | None = None,
+        reporter: ProgressReporter | None = None,
+        delay: float = 0.1,
     ) -> None:
         self._parallel = parallel
-        self._context = mp.get_context("spawn")
-        self._init_args = (
-            self._context.Lock(),
-            self._context.Value("q", 0),
-            self._context.Lock(),
-            self._context.Value("q", 0),
+        self._estimator = estimator or ExponentialSmoothingEstimator(
+            capacity=parallel * 2,
+        )
+        self._reporter = reporter or DefaultProgressReporter()
+        self._guard: None | ProgressGuard = None
+        self._manager: mp.Manager | None = None
+        self._delay = delay
+
+    @property
+    def guard(self) -> ProgressGuard:
+        assert self._guard is not None
+        return self._guard
+
+    def __enter__(self):
+        self._manager = mp.Manager()
+
+        assert self._manager is not None
+
+        self._guard = ProgressGuard(
+            self._manager.Lock(),
+            self._manager.Value("q", 0)
         )
 
-    @staticmethod
-    def _pool_initializer(
-        lock: Lock,
-        steps: Synchronized[int],
-        lock2: Lock,
-        steps2: Synchronized[int],
-    ) -> None:
-        Parallel.ProgressReporter.init_progress(lock, steps)
-        Parallel.ProgressFlipReporter.init_progress(lock2, steps2)
-
-    def progress_reporter_instances(
-        self,
-        every: int,
-        total: int,
-        number: int,
-    ) -> tp.Iterable[Parallel.ProgressReporter]:
-        for i in range(number):
-            yield Parallel.ProgressReporter(every, total)
-
-    def progress_flip_reporter_instances(
-        self,
-        number: int,
-    ) -> tp.Iterable[Parallel.ProgressFlipReporter]:
-        for i in range(number):
-            yield Parallel.ProgressFlipReporter(number)
-
-    def run(
-        self,
-        function: tp.Callable[..., tp.Any],
-        *arguments: tp.Iterable[tp.Any],
-    ) -> tp.Iterable[tp.Any]:
-        with ProcessPoolExecutor(
-            mp_context=self._context,
-            initializer=self._pool_initializer,
-            initargs=self._init_args,
+        self._executor_cm = ProcessPoolExecutor(
             max_workers=self._parallel,
-        ) as executor:
-            return executor.map(
-                function,
-                *arguments,
+            mp_context=mp.get_context("spawn"),
+        )
+        self.executor = self._executor_cm.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return self._executor_cm.__exit__(
+                exc_type, exc_value, traceback
             )
+        finally:
+            self._manager.shutdown()
+
+    def map(
+        self,
+        worker: Worker,
+        *arguments: tp.Iterable[tp.Any],
+    ) -> tp.List[tp.Any]:
+        futures = [
+            self.executor.submit(worker, *item)
+            for item in zip(*arguments)
+        ]
+
+        total = worker.total() * len(futures)
+        self._estimator.reset(total)
+        start = datetime.now()
+
+        while not all(f.done() for f in futures):
+            time.sleep(self._delay)
+            done = self._guard.value()
+            now = datetime.now()
+            finish = self._estimator.estimate(done, now)
+
+            if finish is not None:
+                self._reporter.report(ProgressReporter.Data(
+                    total=total,
+                    done=done,
+                    start=start,
+                    end=finish,
+                    now=now,
+                ))
+        print()
+
+        return [f.result() for f in futures]
+
+class _DummyWorker(Worker):
+    import random
+    def __call__(self, seed, *args) -> None:
+        rng = random.Random()
+        rng.seed(seed)
+        for i in range(10):
+            time.sleep(rng.randint(1, 5))
+            self.update()
+
+    def total(self) -> int:
+        return 10
+
+if __name__ == "__main__":
+
+    with Parallel(parallel=4, delay=0.2) as parallel:
+        worker = _DummyWorker(guard=parallel.guard)
+        results = list(parallel.map(worker, range(50)))

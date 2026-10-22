@@ -6,6 +6,7 @@ from ase import Atoms
 from ase import units as ase_units
 from ase.constraints import FixAtoms
 from ase.units import fs
+import gc
 from ..solver import Solver
 from .. import openmmhelper
 
@@ -141,3 +142,8 @@ class OpenMmSolver(Solver):
             for c in self.callables:
                 if c.matches(steps_done):
                     c.call(steps_done, atoms)
+
+    def close(self):
+        del self._context
+        del self._integrator
+        gc.collect()
