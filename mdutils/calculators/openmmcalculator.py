@@ -1,11 +1,11 @@
 import numpy as np
 import openmm as mm
 from openmm import unit
+from ..solvers import OpenMmSolver
 from ase.calculators.calculator import Calculator, all_changes
 from ase import units as ase_units
 from ase import Atoms
 import typing as tp
-import gc
 from .. import openmmhelper
 
 
@@ -26,38 +26,31 @@ class OpenMmCalculator(Calculator):
         super().__init__(**kwargs)
 
         self._integrator = integrator
-
         self._platform = platform
         self._platform_prop = platform_prop
-
         self._forces = forces
         self._forcedata = forcedata
+        self._atoms = atoms
 
-        cell = openmmhelper.Cell.from_ase(atoms.cell.array)
-        positions = openmmhelper.Positions.from_ase(atoms.get_positions())
-        types = atoms.get_chemical_symbols()
+        self._solver = None
 
-        system = mm.System()
-        system.setDefaultPeriodicBoxVectors(*cell)
-
-        for _ in positions:
-            system.addParticle(0)
-
-        for i, (force, data) in enumerate(zip(self._forces, self._forcedata)):
-            if hasattr(force, "addParticle"):
-                for i, _ in enumerate(positions):
-                    force.addParticle(*data[types[i]])
-
-            system.addForce(force)
-
-        self._context = mm.Context(
-            system,
+    def __enter__(self):
+        self._solver_cm = OpenMmSolver(
             self._integrator,
             self._platform,
-            self._platform_prop
+            self._platform_prop,
+            self._forces,
+            self._forcedata
         )
 
-        self._context.setPositions(positions)
+        self._solver = self._solver_cm.__enter__()
+        self._solver.load_system(self._atoms)
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._solver_cm.__exit__(
+            exc_type, exc_value, traceback
+        )
 
     def calculate(
         self,
@@ -68,16 +61,11 @@ class OpenMmCalculator(Calculator):
         super().calculate(atoms, properties, system_changes)
 
         assert isinstance(atoms, Atoms)
+        assert self._solver is not None
 
-        self._context.setPositions(
-            openmmhelper.Positions.from_ase(atoms.get_positions())
-        )
+        self._solver.update(atoms)
 
-        self._context.setPeriodicBoxVectors(
-            *openmmhelper.Cell.from_ase(np.array(atoms.cell))
-        )
-
-        state = self._context.getState(
+        state = self._solver.get_state(
             getEnergy=True,
             getForces=True,
         )
@@ -88,9 +76,4 @@ class OpenMmCalculator(Calculator):
         self.results["forces"] = openmmhelper.Forces.from_openmm(
             state.getForces(asNumpy=True)
         )
-
-    def close(self):
-        del self._context
-        del self._integrator
-        gc.collect()
 

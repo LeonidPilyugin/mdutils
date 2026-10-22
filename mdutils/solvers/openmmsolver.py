@@ -27,6 +27,12 @@ class OpenMmSolver(Solver):
         self._platform_prop = platform_prop
         self._context: None | mm.Context = None
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
 
     def load_system(self, atoms: Atoms) -> None:
         self._atoms = atoms.copy()
@@ -56,21 +62,32 @@ class OpenMmSolver(Solver):
 
             system.addForce(force)
 
-        context = mm.Context(
+        self._context = mm.Context(
             system,
             self._integrator,
             self._platform,
             self._platform_prop,
         )
 
-        context.setPositions(
+        self.update(atoms)
+
+    def update(self, atoms: Atoms) -> None:
+        assert self._context is not None
+
+        self._context.setPositions(
             openmmhelper.Positions.from_ase(np.array(atoms.positions))
         )
-        context.setVelocities(
+        self._context.setVelocities(
             openmmhelper.Velocities.from_ase(atoms.get_velocities())
         )
+        self._context.setPeriodicBoxVectors(
+            *openmmhelper.Cell.from_ase(np.array(atoms.cell))
+        )
 
-        self.context = context
+    def get_state(self, **kwargs) -> mm.State:
+        assert self._context is not None
+        return self._context.getState(**kwargs)
+
 
     def get_atoms(self) -> Atoms:
         from ase.calculators.calculator import Calculator, all_changes
@@ -90,7 +107,7 @@ class OpenMmSolver(Solver):
                 if self.forces is not None:
                     self.results['forces'] = self.forces
 
-        state = self.context.getState(
+        state = self.get_state(
             getPositions=True,
             getVelocities=True,
             enforcePeriodicBox=False,

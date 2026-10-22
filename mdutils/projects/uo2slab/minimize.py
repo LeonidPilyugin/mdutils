@@ -100,30 +100,29 @@ def perform_file(
 
         atoms.set_constraint(FixAtoms(indices=u_indices))
 
-    atoms.calc = OpenMmCalculator(
+    with OpenMmCalculator(
         atoms,
         mm.VerletIntegrator(1e-3),
         mm.Platform.getPlatformByName(Platform.as_str(platform)),
         { "Precision": "mixed", "DeviceIndex": str(gpu_idx) },
         *load_forces()
-    )
+    ) as calc:
+        atoms.calc = calc
 
-    optimizer = LBFGS(
-        atoms,
-        logfile=path.with_suffix(".optim.log"),
-        memory=10,
-        maxstep=0.10,
-        damping=1.0,
-    )
+        optimizer = LBFGS(
+            atoms,
+            logfile=path.with_suffix(".optim.log"),
+            memory=10,
+            maxstep=0.10,
+            damping=1.0,
+        )
 
-    converged = optimizer.run(
-        fmax=0.01,   # Force tolerance in eV/A
-        steps=10000,
-    )
+        converged = optimizer.run(
+            fmax=0.01,   # Force tolerance in eV/A
+            steps=10000,
+        )
 
-    result = atoms.get_potential_energy(), missing_u_bonds
-
-    atoms.calc.close()
+        result = atoms.get_potential_energy(), missing_u_bonds
 
     return result;
 

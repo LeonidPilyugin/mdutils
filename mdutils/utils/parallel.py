@@ -162,11 +162,7 @@ class DefaultProgressReporter(ProgressReporter):
             message += f"{data.end.strftime('%Y-%m-%d %H:%M')} "
             message += f"({format_timedelta(data.left)} left)"
 
-        print(
-            message,
-            end=" " * 100 + "\r",
-            flush=True,
-        )
+        print(f"\r\033[K{message}", end="", flush=True)
 
 
 class Worker(ABC):
