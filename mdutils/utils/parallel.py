@@ -158,7 +158,7 @@ class DefaultProgressReporter(ProgressReporter):
             f"({data.part * 100:.2f} %)")
 
         if data.end is not None:
-            message += "; expected to finish time: "
+            message += "; expected finish time: "
             message += f"{data.end.strftime('%Y-%m-%d %H:%M')} "
             message += f"({format_timedelta(data.left)} left)"
 
