@@ -1,12 +1,12 @@
 import numpy as np
 import openmm as mm
 from openmm import unit
-from ..solvers import OpenMmSolver
+from .solver import OpenMmSolver
 from ase.calculators.calculator import Calculator, all_changes
 from ase import units as ase_units
 from ase import Atoms
 import typing as tp
-from .. import openmmhelper
+from . import helper as openmmhelper
 
 
 class OpenMmCalculator(Calculator):

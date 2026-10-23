@@ -5,6 +5,7 @@ import numpy as np
 from pathlib import Path
 import typing as tp
 from ...plot.styles import style_context
+from ...utils.timer import Timer
 from .system import SpiralCluster, Uo2SlabSystem, DefectType
 
 def find_min_curve(
@@ -222,5 +223,6 @@ def plot_vac_vs_bonds(
 
 
 if __name__ == "__main__":
-    with style_context():
-        cli()
+    with Timer():
+        with style_context():
+            cli()

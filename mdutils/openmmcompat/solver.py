@@ -8,7 +8,7 @@ from ase.constraints import FixAtoms
 from ase.units import fs
 import gc
 from ..solver import Solver
-from .. import openmmhelper
+from . import helper as openmmhelper
 
 class OpenMmSolver(Solver):
     def __init__(
@@ -22,7 +22,7 @@ class OpenMmSolver(Solver):
         super().__init__()
         self._integrator = integrator
         self._platform = platform
-        self._forces = []
+        self._forces = forces
         self._forcedata = forcedata
         self._platform_prop = platform_prop
         self._context: None | mm.Context = None
@@ -84,11 +84,6 @@ class OpenMmSolver(Solver):
             *openmmhelper.Cell.from_ase(np.array(atoms.cell))
         )
 
-    def get_state(self, **kwargs) -> mm.State:
-        assert self._context is not None
-        return self._context.getState(**kwargs)
-
-
     def get_atoms(self) -> Atoms:
         from ase.calculators.calculator import Calculator, all_changes
 
@@ -107,7 +102,7 @@ class OpenMmSolver(Solver):
                 if self.forces is not None:
                     self.results['forces'] = self.forces
 
-        state = self.get_state(
+        state = self._context.getState(
             getPositions=True,
             getVelocities=True,
             enforcePeriodicBox=False,
@@ -161,6 +156,7 @@ class OpenMmSolver(Solver):
                     c.call(steps_done, atoms)
 
     def minimize(self, **kwargs) -> None:
+        assert self._context is not None
         mm.LocalEnergyMinimizer.minimize(
             self._context,
             **kwargs

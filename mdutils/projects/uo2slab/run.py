@@ -1,9 +1,10 @@
 from .system import Uo2SlabSystem as System
 from .system import Cluster, SpiralCluster, RandomCluster
 from .system import DefectType
-from ...solvers import OpenMmSolver as Solver
+from ...openmmcompat import OpenMmSolver as Solver
 from ...utils.parallel import Parallel, Worker, ProgressCallable
 from ...utils.platform import Platform
+from ...utils.timer import Timer
 from ... import callables as mdc
 from .forces import load_forces
 from pathlib import Path
@@ -287,4 +288,5 @@ def run_random(
 
 
 if __name__ == "__main__":
-    cli()
+    with Timer():
+        cli()

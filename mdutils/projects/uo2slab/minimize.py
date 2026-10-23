@@ -1,14 +1,12 @@
 from os import name
 
-from mdutils import openmmhelper
-
 from .system import Uo2SlabSystem as System
 from .system import SpiralCluster as Cluster
-from ...solvers import OpenMmSolver as Solver
+from ...openmmcompat import OpenMmSolver as Solver
 from ...utils.platform import Platform
 from ...utils.parallel import Parallel, Worker
+from ...utils.timer import Timer
 from ... import callables as mdc
-from ...calculators import OpenMmCalculator
 from .forces import load_forces
 from pathlib import Path
 import openmm as mm
@@ -115,14 +113,10 @@ def perform_file(
             maxIterations=10000,
         )
 
-        state = solver.get_state(
-            getEnergy=True,
-            getForces=True,
+        result = (
+            solver.get_atoms().get_potential_energy(),
+            missing_u_bonds,
         )
-
-        result = openmmhelper.Energy.from_openmm(
-            state.getPotentialEnergy()
-        ), missing_u_bonds
 
     return result;
 
@@ -144,7 +138,12 @@ def filegenerator(
             yield f, p
 
 class MinimizeWorker(Worker):
-    def __init__(self, platform: Platform, freeze_u: bool, **kwargs):
+    def __init__(
+        self,
+        platform: Platform,
+        freeze_u: bool,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self._platform = platform
         self._freeze_u = freeze_u
@@ -154,11 +153,16 @@ class MinimizeWorker(Worker):
         tup: tp.Tuple[Path, Path],
         gpu_idx: int,
         *args,
-    ) -> tp.Tuple[int, int, float, float]:
+    ) -> tp.Tuple[int, float, float, int, None | int]:
         f, p = tup
-        dist, n = p.name.split("-")
-        dist = float(dist)
-        n = int(n)
+        spl = p.name.split("-")
+        data = ()
+        if len(spl) == 2:
+            data = float(spl[0]), int(spl[1]), None
+        else:
+            assert len(spl) == 3
+            data = float(spl[0]), int(spl[1]), int(spl[2], 16)
+
 
         e, b = perform_file(
             f,
@@ -168,7 +172,7 @@ class MinimizeWorker(Worker):
         )
         self.update()
 
-        return n, b, dist, e
+        return b, e, data[0], data[1], data[2]
 
 @click.command()
 @click.option(
@@ -226,18 +230,15 @@ def main(
 
     assert result is not None
 
-    es = [r[3] for r in result]
-    dists = [r[2] for r in result]
-    bs = [r[1] for r in result]
-    ns = [r[0] for r in result]
-
     pd.DataFrame({
-        "e": es,
-        "dist": dists,
-        "n": ns,
-        "b": bs,
+        "e": [r[1] for r in result],
+        "dist": [r[2] for r in result],
+        "n": [r[3] for r in result],
+        "b": [r[0] for r in result],
+        "seed": [r[1] for r in result],
     }).to_csv(working_directory / filename)
 
 
 if __name__ == "__main__":
-    main()
+    with Timer():
+        main()

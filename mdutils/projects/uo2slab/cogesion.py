@@ -1,9 +1,9 @@
 from .system import Uo2SlabSystem as System
 from .system import SpiralCluster as Cluster
-from ...solvers import OpenMmSolver as Solver
-from ...utils import Platform, Parallel
+from ...openmmcompat import OpenMmSolver as Solver
+from ...utils.platform import Platform
+from ...utils.timer import Timer
 from ... import callables as mdc
-from ...calculators import OpenMmCalculator
 from .forces import load_forces
 from pathlib import Path
 import openmm as mm
@@ -17,16 +17,6 @@ from ase.optimize import LBFGS, FIRE
 from ase.constraints import FixAtoms
 import numpy as np
 import click
-
-
-def get_openmm_calc(atoms: Atoms, platform: Platform) -> OpenMmCalculator:
-    return OpenMmCalculator(
-        atoms,
-        mm.VerletIntegrator(1e-3),
-        mm.Platform.getPlatformByName(Platform.as_str(platform)),
-        { "Precision": "mixed", "DeviceIndex": str(0) },
-        *load_forces()
-    )
 
 
 def create_system(
@@ -99,12 +89,19 @@ def main(
 
     for l in layers:
         system = create_system(l, vacuum, repeat)
-        system.calc = get_openmm_calc(system, platform)
-        es.append(system.get_potential_energy())
-        ns.append(len(system))
+        with Solver(
+            mm.VerletIntegrator(1e-3),
+            mm.Platform.getPlatformByName(Platform.as_str(platform)),
+            { "Precision": "mixed", "DeviceIndex": str(0) },
+            *load_forces()
+        ) as solver:
+            solver.load_system(system)
+            es.append(solver.get_atoms().get_potential_energy())
+            ns.append(len(system))
 
     a, b = np.polyfit(ns, es, 1)
     print(f"Cogesion energy is {a * 6:.3f} eV / 2x UO2 molecule")
 
 if __name__ == "__main__":
-    main()
+    with Timer():
+        main()
