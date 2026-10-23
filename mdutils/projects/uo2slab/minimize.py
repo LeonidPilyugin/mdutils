@@ -1,9 +1,10 @@
 from os import name
 
+from mdutils import openmmhelper
+
 from .system import Uo2SlabSystem as System
 from .system import SpiralCluster as Cluster
 from ...solvers import OpenMmSolver as Solver
-from ...utils import Platform, Parallel
 from ...utils.platform import Platform
 from ...utils.parallel import Parallel, Worker
 from ... import callables as mdc
@@ -19,7 +20,6 @@ import multiprocessing as mp
 import typing as tp
 from ase import Atoms
 from ase.io import read
-from ase.optimize import LBFGS, FIRE
 from ase.constraints import FixAtoms
 from ase.neighborlist import neighbor_list
 import numpy as np
@@ -100,29 +100,29 @@ def perform_file(
 
         atoms.set_constraint(FixAtoms(indices=u_indices))
 
-    with OpenMmCalculator(
-        atoms,
+    with Solver(
         mm.VerletIntegrator(1e-3),
         mm.Platform.getPlatformByName(Platform.as_str(platform)),
         { "Precision": "mixed", "DeviceIndex": str(gpu_idx) },
         *load_forces()
-    ) as calc:
-        atoms.calc = calc
+    ) as solver:
+        solver.load_system(atoms)
 
-        optimizer = LBFGS(
-            atoms,
-            logfile=path.with_suffix(".optim.log"),
-            memory=10,
-            maxstep=0.10,
-            damping=1.0,
+        eva2mm = 96.4853
+
+        solver.minimize(
+            tolerance=0.1 * eva2mm,
+            maxIterations=10000,
         )
 
-        converged = optimizer.run(
-            fmax=0.01,   # Force tolerance in eV/A
-            steps=10000,
+        state = solver.get_state(
+            getEnergy=True,
+            getForces=True,
         )
 
-        result = atoms.get_potential_energy(), missing_u_bonds
+        result = openmmhelper.Energy.from_openmm(
+            state.getPotentialEnergy()
+        ), missing_u_bonds
 
     return result;
 

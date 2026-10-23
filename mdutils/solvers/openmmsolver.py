@@ -160,6 +160,12 @@ class OpenMmSolver(Solver):
                 if c.matches(steps_done):
                     c.call(steps_done, atoms)
 
+    def minimize(self, **kwargs) -> None:
+        mm.LocalEnergyMinimizer.minimize(
+            self._context,
+            **kwargs
+        )
+
     def close(self):
         del self._context
         del self._integrator
