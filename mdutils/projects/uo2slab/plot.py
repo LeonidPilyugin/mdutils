@@ -1,12 +1,16 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 import click
+import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
-import numpy as np
-from pathlib import Path
-import typing as tp
+
 from ...plot.styles import style_context
 from ...utils.timer import Timer
-from .system import SpiralCluster, Uo2SlabSystem, DefectType
+from .system import DefectType
+
 
 def find_min_curve(
     df: pd.DataFrame,
@@ -150,11 +154,11 @@ def plot_de_vs_n(
 )
 def plot_de_vs_b(
     working_directory: Path,
-    data_filenames: tp.Tuple[str],
+    data_filenames: tuple[str],
     plot_filename: str,
     cogesion_energy: float,
     defect_type: DefectType,
-    labels: tp.Tuple[str],
+    labels: tuple[str],
 ) -> None:
     """Plot energy difference vs number of cut horizontal bonds"""
 
@@ -223,6 +227,5 @@ def plot_vac_vs_bonds(
 
 
 if __name__ == "__main__":
-    with Timer():
-        with style_context():
-            cli()
+    with Timer(), style_context():
+        cli()

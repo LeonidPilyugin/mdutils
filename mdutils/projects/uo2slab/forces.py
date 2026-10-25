@@ -1,10 +1,17 @@
-from pathlib import Path
+from __future__ import annotations
+
 import typing as tp
+from pathlib import Path
+
 import openmm as mm
 
+
 def load_forces(
-    root: Path = Path("~/potentials").expanduser()
-) -> tp.Tuple[tp.Iterable[mm.Force], tp.Iterable[tp.Dict[str, tp.Any]]]:
+    root: Path | None = None
+) -> tuple[tp.Iterable[mm.Force], tp.Iterable[dict[str, tp.Any]]]:
+    if root is None:
+        root = Path("~/potentials").expanduser()
+
     forces = []
     for i in range(3):
         with open(root / f"uo2_xe{i}.xml") as f:

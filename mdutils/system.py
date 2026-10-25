@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+
 from ase import Atoms
+
 
 class System(ABC):
     @abstractmethod

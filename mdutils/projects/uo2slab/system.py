@@ -1,38 +1,46 @@
-import typing as tp
-from abc import ABC, abstractmethod
-from ase import Atoms
-from ase.spacegroup import crystal
-from ase.build import surface
-from ase.constraints import FixAtoms
-from ase.md.velocitydistribution import thermalize_momenta
-from ase.geometry import find_mic
-from ase.visualize import view
-import matplotlib.pyplot as plt
-from ase.visualize.plot import plot_atoms
-import numpy as np
-from collections import Counter
 import enum
 import random
-import click
-from tqdm import tqdm
+import typing as tp
+from abc import ABC, abstractmethod
+from collections import Counter
 from pathlib import Path
+
+import click
+import matplotlib.pyplot as plt
+import numpy as np
+from ase import Atoms
+from ase.build import surface
+from ase.constraints import FixAtoms
+from ase.geometry import find_mic
+from ase.md.velocitydistribution import thermalize_momenta
+from ase.spacegroup import crystal
+from ase.visualize import view
+from ase.visualize.plot import plot_atoms
+from numpy import typing as npt
+from tqdm import tqdm
+
 from ...system import System
+from ...utils.timer import Timer
+
 
 class DefectType(enum.Enum):
     VACCANCY = enum.auto()
     ADATOM = enum.auto()
 
 class Cluster(ABC):
-    def __init__(self, *, defect_type: DefectType):
-        self._init_pos: None | np.ndarray = None
-        self._basis: None | tp.Tuple[np.ndarray, np.ndarray] = None
+    def __init__(self, *, defect_type: DefectType) -> None:
+        self._init_pos: None | npt.NDArray[np.float64] = None
+        self._basis: None | tuple[np.ndarray, np.ndarray] = None
         self._defect_type = defect_type
         self._sequence: None | tp.Iterable[np.ndarray] = None
 
-    def set_position(self, pos: np.ndarray) -> None:
+    def set_position(self, pos: npt.NDArray[np.float64]) -> None:
         self._init_pos = pos
 
-    def set_basis(self, basis: tp.Tuple[np.ndarray, np.ndarray]) -> None:
+    def set_basis(
+        self,
+        basis: tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]
+    ) -> None:
         self._basis = basis
 
     @property
@@ -40,10 +48,15 @@ class Cluster(ABC):
         return self._defect_type
 
     @abstractmethod
-    def sequence(self) -> tp.Iterable[np.ndarray]:
+    def sequence(self) -> tp.Iterable[npt.NDArray[np.float64]]:
         pass
 
-    def add_uo2_molecule(self, position: np.ndarray, atoms: Atoms) -> None:
+    def add_uo2_molecule(
+        self,
+        position: npt.NDArray[np.float64],
+        atoms: Atoms
+    ) -> None:
+        assert self._basis is not None
         a, b = self._basis
         c1 = (a - b / 2) / 3 * 2
         c2 = (b - a / 2) / 3 * 2
@@ -58,18 +71,22 @@ class Cluster(ABC):
             ]
         )
 
-    def del_uo2_molecule(self, position: np.ndarray, atoms: Atoms) -> None:
+    def del_uo2_molecule(
+        self,
+        position: npt.NDArray[np.float64],
+        atoms: Atoms
+    ) -> None:
         def delete_nearest_atom(r: np.ndarray, element: str, tol: float = 3.0) -> None:
             indices = np.array(
                 [i for i, atom in enumerate(atoms)
                  if atom.symbol == element and
-                 np.abs((atom.position - position))[2] < tol]
+                 np.abs(atom.position - position)[2] < tol]
             )
             vectors = atoms.positions[indices] - r
-            vectors_mic, distances = find_mic(
+            _vectors_mic, distances = find_mic(
                 vectors,
                 cell=atoms.cell,
-                pbc=atoms.pbc
+                pbc=atoms.pbc # pyright: ignore[reportArgumentType]
             )
 
             nearest_idx = indices[np.argmin(distances)]
@@ -107,10 +124,10 @@ class Uo2SlabSystem(System):
         self,
         cluster: None | Cluster = None,
         temperature: None | float = None,
-        lattice_parameter : float = LATTICE_PARAMETER,
-        slab_orientation : tp.Tuple[int, int, int] = SLAB_ORIENTATION,
-        n_layers : int = N_LAYERS,
-        repeatition : tp.Tuple[int, int, int] = REPEATITION,
+        lattice_parameter: float = LATTICE_PARAMETER,
+        slab_orientation: tuple[int, int, int] = SLAB_ORIENTATION,
+        n_layers: int = N_LAYERS,
+        repeatition: tuple[int, int, int] = REPEATITION,
         vacuum: float = VACUUM,
     ) -> None:
         self._cluster = cluster
@@ -138,16 +155,13 @@ class Uo2SlabSystem(System):
             primitive_cell=False,
         )
 
-    def generate_slab(self, bulk : Atoms, tolerance=1e-3) -> Atoms:
+    def generate_slab(self, bulk: Atoms, tolerance: float = 1e-3) -> Atoms:
         slab = surface(
             bulk,
             self._slab_orientation,
             self._n_layers,
             self._vacuum,
         ).repeat(self._repeatition)
-
-        a, b = self.surface_basis(slab)
-        c = (a - b / 2) / 3 * 2
 
         # get O indeces
         symbols = np.array(slab.get_chemical_symbols())
@@ -157,7 +171,6 @@ class Uo2SlabSystem(System):
         spacing = self._lattice_parameter / np.sqrt(3)
 
         top_z = np.max(o_atoms[:,2])
-        bot_z = np.min(o_atoms[:,2])
 
         top_o_atoms = np.where(
             np.abs(slab.positions[:,2] - top_z) < tolerance
@@ -174,7 +187,7 @@ class Uo2SlabSystem(System):
     def surface_basis(
         self,
         slab: Atoms
-    ) -> tp.Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         c = np.array(slab.cell)
         return (
             c[0] / self._repeatition[0] / 2,
@@ -200,7 +213,6 @@ class Uo2SlabSystem(System):
         spacing = self._lattice_parameter / np.sqrt(3)
 
         top_z = np.max(u_positions[:,2])
-        bot_z = np.min(u_positions[:,2])
 
         reference_index = np.where(
             np.abs(top_z - u_positions[:,2]) < tolerance
@@ -226,7 +238,7 @@ class Uo2SlabSystem(System):
         self._cluster.set_position(opposite_position)
         self._cluster.modify(slab)
 
-    def freeze(self, atoms : Atoms) -> None:
+    def freeze(self, atoms: Atoms) -> None:
         u_indices = [
             i for i, atom in enumerate(atoms)
             if atom.symbol == "U"
@@ -314,9 +326,9 @@ class RandomCluster(Cluster):
         self.rng = random.Random()
         self.rng.seed(random_seed)
 
-    def sequence(self) -> tp.Iterable[np.ndarray]:
+    def sequence(self) -> tp.Iterable[npt.NDArray[np.float64]]:
         if self.n_atoms == 0:
-            return
+            return []
 
         assert self._basis is not None
 
@@ -347,7 +359,7 @@ class ClusterType(enum.Enum):
     RANDOM = enum.auto()
 
 @click.group()
-def cli(): pass
+def cli() -> None: pass
 
 @cli.command("view")
 @click.option(
@@ -381,7 +393,7 @@ def view_system(
     n_defects: int,
     n_layers: int,
     replicate: int,
-):
+) -> None:
     cluster = None
 
     match cluster_type:
@@ -428,7 +440,7 @@ def render_clusters(
     replicate: int,
     n_systems: int,
     working_directory: Path,
-):
+) -> None:
     rng = random.Random()
     rng.seed(random_seed)
 
@@ -457,6 +469,7 @@ def render_clusters(
 
 
 if __name__ == "__main__":
-    cli()
+    with Timer():
+        cli()
 
 

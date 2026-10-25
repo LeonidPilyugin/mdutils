@@ -1,22 +1,15 @@
-from .system import Uo2SlabSystem as System
-from .system import SpiralCluster as Cluster
+import typing as tp
+
+import click
+import numpy as np
+import openmm as mm
+from ase import Atoms
+
 from ...openmmcompat import OpenMmSolver as Solver
 from ...utils.platform import Platform
 from ...utils.timer import Timer
-from ... import callables as mdc
 from .forces import load_forces
-from pathlib import Path
-import openmm as mm
-import sys
-from itertools import product
-import multiprocessing as mp
-import typing as tp
-from ase import Atoms
-from ase.io import read
-from ase.optimize import LBFGS, FIRE
-from ase.constraints import FixAtoms
-import numpy as np
-import click
+from .system import Uo2SlabSystem as System
 
 
 def create_system(
@@ -32,11 +25,11 @@ def create_system(
 
     for _ in range(3 - n_layers % 3):
         u_indices = [
-            atom.index
+                int(atom.index) # pyright: ignore[reportArgumentType]
             for atom in atoms
             if atom.symbol == "U"
         ]
-        u_pos = atoms.positions[u_indices]
+        u_pos = atoms.positions[u_indices] # pyright: ignore[reportCallIssue]
         top_u = np.max(u_pos[:,2])
         to_del = [i for i, a in enumerate(atoms)
                   if a.symbol == "U" and
@@ -46,11 +39,11 @@ def create_system(
 
         for _ in range(2):
             o_indices = [
-                atom.index
+                int(atom.index) # pyright: ignore[reportArgumentType]
                 for atom in atoms
                 if atom.symbol == "O"
             ]
-            o_pos = atoms.positions[o_indices]
+            o_pos = atoms.positions[o_indices] # pyright: ignore[reportCallIssue]
             top_o = np.max(o_pos[:,2])
             to_del = [i for i, a in enumerate(atoms)
                       if a.symbol == "O"
@@ -99,7 +92,7 @@ def main(
             es.append(solver.get_atoms().get_potential_energy())
             ns.append(len(system))
 
-    a, b = np.polyfit(ns, es, 1)
+    a, _ = np.polyfit(ns, es, 1)
     print(f"Cogesion energy is {a * 6:.3f} eV / 2x UO2 molecule")
 
 if __name__ == "__main__":

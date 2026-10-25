@@ -1,19 +1,26 @@
 from __future__ import annotations
-from ..solver import Solver
-from collections import deque
-import time
-from datetime import timedelta, datetime
+
 import multiprocessing as mp
-from multiprocessing.synchronize import Lock
-from multiprocessing.sharedctypes import Synchronized, Value
-from concurrent.futures import ProcessPoolExecutor
+import random
+import time
 import typing as tp
 from abc import ABC, abstractmethod
-from ase import Atoms
+from collections import deque
+from concurrent.futures import ProcessPoolExecutor
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from multiprocessing.managers import SyncManager, ValueProxy
+from types import TracebackType
+from typing import ParamSpec, Self, TypeVar
+
+from ase import Atoms
+
+from ..solver import Solver
+
 
 class ProgressGuard:
-    def __init__(self, lock: Lock, steps: Synchronized[int]) -> None:
+    def __init__(self, lock: AbstractContextManager[object], steps: ValueProxy[int]) -> None:
         self._lock = lock
         self._shared_steps = steps
 
@@ -36,7 +43,7 @@ class ProgressCallable(Solver.Callable):
         self,
         guard: ProgressGuard,
         every: int,
-    ):
+    ) -> None:
         self._guard = guard
         self._last_step = 0
         self._every = every
@@ -53,7 +60,7 @@ class ProgressCallable(Solver.Callable):
 
 
 class ElapsedEstimator(ABC):
-    def __init__(self):
+    def __init__(self) -> None:
         self._total: None | int = None
 
     def reset(self, total: int) -> None:
@@ -70,7 +77,7 @@ class ElapsedEstimator(ABC):
 
 
 class ExponentialSmoothingEstimator(ElapsedEstimator):
-    def __init__(self, *, alpha: float = 0.9, capacity = 10):
+    def __init__(self, *, alpha: float = 0.9, capacity = 10) -> None:
         super().__init__()
         assert 0.0 < alpha <= 1.0
         assert(capacity > 1)
@@ -164,16 +171,18 @@ class DefaultProgressReporter(ProgressReporter):
 
         print(f"\r\033[K{message}", end="", flush=True)
 
+P = ParamSpec("P")
+R = TypeVar("R")
 
-class Worker(ABC):
-    def __init__(self, *, guard: ProgressGuard):
+class Worker[**P, R](ABC):
+    def __init__(self, *, guard: ProgressGuard) -> None:
         self._guard = guard
 
     def update(self, done: int = 1) -> None:
         self._guard.increment(done)
 
     @abstractmethod
-    def __call__(self, *args) -> tp.Any:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
         pass
 
     def total(self) -> int:
@@ -194,7 +203,7 @@ class Parallel:
         )
         self._reporter = reporter or DefaultProgressReporter()
         self._guard: None | ProgressGuard = None
-        self._manager: mp.Manager | None = None
+        self._manager: SyncManager | None = None
         self._delay = delay
 
     @property
@@ -202,7 +211,7 @@ class Parallel:
         assert self._guard is not None
         return self._guard
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self._manager = mp.Manager()
 
         assert self._manager is not None
@@ -219,7 +228,13 @@ class Parallel:
         self.executor = self._executor_cm.__enter__()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None
+    ) -> bool | None:
+        assert self._manager is not None
         try:
             return self._executor_cm.__exit__(
                 exc_type, exc_value, traceback
@@ -231,7 +246,9 @@ class Parallel:
         self,
         worker: Worker,
         *arguments: tp.Iterable[tp.Any],
-    ) -> tp.List[tp.Any]:
+    ) -> list[tp.Any]:
+        assert self._guard is not None
+
         futures = [
             self.executor.submit(worker, *item)
             for item in zip(*arguments)
@@ -259,9 +276,8 @@ class Parallel:
 
         return [f.result() for f in futures]
 
-class _DummyWorker(Worker):
-    import random
-    def __call__(self, seed, *args) -> None:
+class _DummyWorker(Worker[[int], None]):
+    def __call__(self, seed: int) -> None:
         rng = random.Random()
         rng.seed(seed)
         for i in range(10):

@@ -1,23 +1,27 @@
-import typing as tp
-from dataclasses import dataclass
-import openmm as mm
-import numpy as np
-from ase import Atoms
-from ase import units as ase_units
-from ase.constraints import FixAtoms
-from ase.units import fs
+from __future__ import annotations
+
 import gc
+import typing as tp
+from types import TracebackType
+from typing import Self
+
+import numpy as np
+import openmm as mm
+from ase import Atoms
+from ase.constraints import FixAtoms
+
 from ..solver import Solver
 from . import helper as openmmhelper
+
 
 class OpenMmSolver(Solver):
     def __init__(
         self,
         integrator: mm.Integrator,
         platform: mm.Platform,
-        platform_prop: tp.Dict[str, str],
+        platform_prop: dict[str, str],
         forces: tp.Iterable[mm.Force],
-        forcedata: tp.Iterable[tp.Dict[str, tp.Any]],
+        forcedata: tp.Iterable[dict[str, tp.Any]],
     ) -> None:
         super().__init__()
         self._integrator = integrator
@@ -27,10 +31,15 @@ class OpenMmSolver(Solver):
         self._platform_prop = platform_prop
         self._context: None | mm.Context = None
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None
+    ) -> None:
         self.close()
 
 
@@ -58,7 +67,7 @@ class OpenMmSolver(Solver):
         for force, data in zip(self._forces, self._forcedata):
             if hasattr(force, "addParticle"):
                 for i, _ in enumerate(masses):
-                    force.addParticle(*data[types[i]])
+                    force.addParticle(*data[types[i]]) # pyright: ignore[reportAttributeAccessIssue]
 
             system.addForce(force)
 
@@ -88,7 +97,7 @@ class OpenMmSolver(Solver):
         from ase.calculators.calculator import Calculator, all_changes
 
         class _Calculator(Calculator):
-            implemented_properties = ['energy', 'forces']
+            implemented_properties: tp.ClassVar = ['energy', 'forces'] # pyright: ignore[reportIncompatibleVariableOverride]
 
             def __init__(self, energy, forces=None, **kwargs):
                 super().__init__(**kwargs)
@@ -102,7 +111,7 @@ class OpenMmSolver(Solver):
                 if self.forces is not None:
                     self.results['forces'] = self.forces
 
-        state = self._context.getState(
+        state = self.get_state(
             getPositions=True,
             getVelocities=True,
             enforcePeriodicBox=False,
@@ -114,22 +123,22 @@ class OpenMmSolver(Solver):
 
         atoms.set_positions(
             openmmhelper.Positions.from_openmm(
-                state.getPositions(asNumpy=True)
+                state.getPositions(asNumpy=True) # pyright: ignore[reportAttributeAccessIssue]
             )
         )
 
         atoms.set_velocities(
             openmmhelper.Velocities.from_openmm(
-                state.getVelocities(asNumpy=True)
+                state.getVelocities(asNumpy=True) # pyright: ignore[reportAttributeAccessIssue]
             )
         )
 
         atoms.calc = _Calculator(
             energy=openmmhelper.Energy.from_openmm(
-                energy=state.getPotentialEnergy()
+                energy=state.getPotentialEnergy() # pyright: ignore[reportAttributeAccessIssue]
             ),
             forces=openmmhelper.Forces.from_openmm(
-                state.getForces(asNumpy=True)
+                state.getForces(asNumpy=True) # pyright: ignore[reportAttributeAccessIssue]
             ),
         )
 
@@ -140,10 +149,7 @@ class OpenMmSolver(Solver):
 
         while steps_done < steps:
             to_run = min(
-                map(
-                    lambda x: x.next_match(steps_done),
-                    self.callables
-                )
+                x.next_match(steps_done) for x in self.callables
             )
 
             self._integrator.step(to_run)
@@ -154,6 +160,10 @@ class OpenMmSolver(Solver):
             for c in self.callables:
                 if c.matches(steps_done):
                     c.call(steps_done, atoms)
+
+    def get_state(self, **kwargs) -> mm.Context:
+        assert self._context is not None
+        return self._context.getState(**kwargs)
 
     def minimize(self, **kwargs) -> None:
         assert self._context is not None

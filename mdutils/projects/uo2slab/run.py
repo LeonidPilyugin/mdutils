@@ -1,30 +1,31 @@
-from .system import Uo2SlabSystem as System
-from .system import Cluster, SpiralCluster, RandomCluster
-from .system import DefectType
+from __future__ import annotations
+
+import random
+import shutil
+import typing as tp
+from dataclasses import dataclass
+from itertools import product
+from pathlib import Path
+
+import click
+import openmm as mm
+
+from ... import callables as mdc
 from ...openmmcompat import OpenMmSolver as Solver
-from ...utils.parallel import Parallel, Worker, ProgressCallable
+from ...utils.parallel import Parallel, ProgressCallable, Worker
 from ...utils.platform import Platform
 from ...utils.timer import Timer
-from ... import callables as mdc
 from .forces import load_forces
-from pathlib import Path
-import openmm as mm
-import sys
-import shutil
-from itertools import product
-import multiprocessing as mp
-import typing as tp
-from ase import Atoms
-import click
-from dataclasses import dataclass
-import random
+from .system import Cluster, DefectType, RandomCluster, SpiralCluster
+from .system import Uo2SlabSystem as System
+
 
 @dataclass
 class Params:
     gpu_idx: int
     vacuum: float
     temperature: float
-    repeatition: tp.Tuple[int, int, int]
+    repeatition: tuple[int, int, int]
     n_layers: int
     cluster: Cluster
     subdir: str

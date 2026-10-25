@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+
 from ase import Atoms
+
 
 class Solver(ABC):
     class Callable(ABC):
@@ -22,7 +24,7 @@ class Solver(ABC):
     def load_system(self, atoms: Atoms) -> None:
         pass
 
-    def attach(self, callable_) -> None:
+    def attach(self, callable_: Solver.Callable) -> None:
         self.callables.append(callable_)
 
     @abstractmethod

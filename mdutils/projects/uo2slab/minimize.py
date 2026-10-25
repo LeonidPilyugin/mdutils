@@ -1,27 +1,23 @@
-from os import name
+from __future__ import annotations
 
-from .system import Uo2SlabSystem as System
-from .system import SpiralCluster as Cluster
-from ...openmmcompat import OpenMmSolver as Solver
-from ...utils.platform import Platform
-from ...utils.parallel import Parallel, Worker
-from ...utils.timer import Timer
-from ... import callables as mdc
-from .forces import load_forces
-from pathlib import Path
-import openmm as mm
-import sys
-from tqdm import tqdm
-import pandas as pd
-from itertools import product
-import multiprocessing as mp
 import typing as tp
-from ase import Atoms
-from ase.io import read
-from ase.constraints import FixAtoms
-from ase.neighborlist import neighbor_list
-import numpy as np
+from pathlib import Path
+
 import click
+import numpy as np
+import openmm as mm
+import pandas as pd
+from ase import Atoms
+from ase.constraints import FixAtoms
+from ase.io import read
+from ase.neighborlist import neighbor_list
+
+from ...openmmcompat import OpenMmSolver as Solver
+from ...utils.parallel import Parallel, Worker
+from ...utils.platform import Platform
+from ...utils.timer import Timer
+from .forces import load_forces
+
 
 def get_cut_horizontal_u_bonds_number(
     slab: Atoms,
@@ -67,7 +63,7 @@ def perform_file(
     platform: Platform,
     gpu_idx: int,
     freeze_u: bool = True,
-) -> tp.Tuple[float, int]:
+) -> tuple[float, int]:
     atoms = read(
         path,
         format="lammps-data",
@@ -124,36 +120,38 @@ def filegenerator(
     path: Path,
     every: int,
     suffix: str = ".lammpsdata"
-) -> tp.Iterator[tp.Tuple[Path, Path]]:
+) -> tp.Iterator[tuple[Path, Path]]:
     for p in filter(lambda x: x.is_dir(), path.iterdir()):
-        for f in list(
-            sorted(
+        for f in sorted(
                 filter(
                     lambda x: x.suffix == suffix,
                     (p / "nomean").iterdir()
                 ),
                 key=lambda x: int(x.stem)
-            )
-        )[::every]:
+            )[::every]:
             yield f, p
 
-class MinimizeWorker(Worker):
+class MinimizeWorker(
+    Worker[
+        [tuple[Path, Path], int],
+        tuple[int, float, float, int, int | None],
+    ]
+):
     def __init__(
         self,
         platform: Platform,
         freeze_u: bool,
         **kwargs
-    ):
+    ) -> None:
         super().__init__(**kwargs)
         self._platform = platform
         self._freeze_u = freeze_u
 
     def __call__(
         self,
-        tup: tp.Tuple[Path, Path],
+        tup: tuple[Path, Path],
         gpu_idx: int,
-        *args,
-    ) -> tp.Tuple[int, float, float, int, None | int]:
+    ) -> tuple[int, float, float, int, None | int]:
         f, p = tup
         spl = p.name.split("-")
         data = ()

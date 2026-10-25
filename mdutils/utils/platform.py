@@ -1,5 +1,6 @@
 import enum
 
+
 class Platform(enum.Enum):
     HIP = enum.auto()
     CUDA = enum.auto()
