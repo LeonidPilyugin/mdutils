@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import typing as tp
+import warnings
 from types import TracebackType
 from typing import Self
 
@@ -20,8 +21,8 @@ class OpenMmSolver(Solver):
         integrator: mm.Integrator,
         platform: mm.Platform,
         platform_prop: dict[str, str],
-        forces: tp.Iterable[mm.Force],
-        forcedata: tp.Iterable[dict[str, tp.Any]],
+        forces: tp.Sequence[mm.Force],
+        forcedata: tp.Sequence[dict[str, tp.Any]],
     ) -> None:
         super().__init__()
         self._integrator = integrator
@@ -30,6 +31,11 @@ class OpenMmSolver(Solver):
         self._forcedata = forcedata
         self._platform_prop = platform_prop
         self._context: None | mm.Context = None
+
+        if len(forces) != len(forcedata):
+            raise ValueError("Different lengths of \"forces\" and \"forcedata\"")
+        if len(forces) == 0:
+            warnings.warn("No forces have been loaded. Did you forget to set forces?")
 
     def __enter__(self) -> Self:
         return self
