@@ -15,6 +15,7 @@ dependencies = [
     "click",
     "tqdm",
     "matplotlib>=3.7",
+    "scikit-learn",
 ]
 
 [tool.setuptools.packages.find]
